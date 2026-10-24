@@ -57,6 +57,17 @@ Kết quả trong `kaggle-output/`:
 
 Đổi beam: sửa `BEAMS` ở đầu kernel (1/5/10/50). Raw predictions của paper xếp thứ tự khác `test.csv` → kernel align theo `(source, target)` và báo `prediction_string_agreement`; smoke test 5 dòng cho kết quả khớp 100%.
 
+Merge thủ công (khi tải shard từ nhiều version/nhiều kernel):
+
+```bash
+python eval/merge_results.py \
+  --preds kaggle-output/preds kaggle-output-shard2/preds \
+  --test test.csv --paper vulrepair_raw_preds_for_cve_fixes_test.csv \
+  --beams 50 --out docs/results
+```
+
+`--allow-partial` cho phép merge khi còn thiếu shard (chỉ để kiểm tra giữa chừng).
+
 ## Nguồn
 
 - Code: <https://github.com/awsm-research/VulRepair>

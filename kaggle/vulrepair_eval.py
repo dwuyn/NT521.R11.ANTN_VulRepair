@@ -41,10 +41,16 @@ TEST_URL = ("https://huggingface.co/datasets/MickyMike/cvefixes_bigvul/"
             "resolve/main/test.csv")
 
 BEAMS = 50
+# The paper publishes per-row predictions only for beam 50; lower beams are
+# compared against the aggregate numbers in Fig. 8.
+COMPARE_PAPER = BEAMS == 50
+PAPER_FIG8 = {1: 0.3007, 5: 0.41, 10: None, 50: 0.4367}
 PARALLEL_GPUS = 2
 # (start, end) over the 1,706 test rows. 427 rows/shard keeps each process
 # well inside the 12 h GPU session limit.
 SHARDS = [(0, 427), (427, 854), (854, 1281), (1281, 1706)]
+# False when re-running a subset of shards (partial recovery run).
+MERGE_RESULTS = True
 
 SCRIPT = f"{REPO}/M1_VulRepair_PL-NL/vulrepair_main.py"
 PRED_DIR = f"{WORK}/preds"
@@ -187,32 +193,41 @@ def merge_and_report(results):
         f"{REPO}/data/VulRepair_raw_predictions/"
         "vulrepair_raw_preds_for_cve_fixes_test.csv")
 
-    # The paper CSV uses a different row order than the HF test split.
-    paper_key = pd.MultiIndex.from_frame(paper[["source", "target"]])
-    paper_ok = pd.Series(paper["correctly_predicted"].values, index=paper_key)
-    paper_raw = pd.Series(paper["raw_predictions"].values, index=paper_key)
-    keep = ~paper_ok.index.duplicated(keep="first")
-    paper_ok, paper_raw = paper_ok[keep], paper_raw[keep]
-
-    key = pd.MultiIndex.from_frame(pred[["source", "target"]])
-    ok_aligned = paper_ok.reindex(key)
-    raw_aligned = paper_raw.reindex(key)
-    missing = int(ok_aligned.isna().sum())
-    agree = float((pred["correctly_predicted"].values ==
-                   ok_aligned.values).mean()) if missing == 0 else float("nan")
-    raw_agree = float((pred["raw_predictions"].values ==
-                       raw_aligned.values).mean()) if missing == 0 else float("nan")
-
     ours = float(pred["correctly_predicted"].mean())
     theirs = float(paper["correctly_predicted"].mean())
 
-    g_ours = pred.groupby("cwe_id")["correctly_predicted"].agg(["size", "sum"])
-    g_paper = paper.groupby("cwe_id")["correctly_predicted"].agg(["size", "sum"])
-    table = g_ours.join(g_paper, lsuffix="_ours", rsuffix="_paper")
-    table["pp_ours"] = table["sum_ours"] / table["size_ours"]
-    table["pp_paper"] = table["sum_paper"] / table["size_paper"]
-    table["delta_pp"] = table["pp_ours"] - table["pp_paper"]
-    top = table.sort_values("size_ours", ascending=False).head(10)
+    agree = raw_agree = float("nan")
+    missing = -1
+    if COMPARE_PAPER:
+        # The paper CSV uses a different row order than the HF test split.
+        paper_key = pd.MultiIndex.from_frame(paper[["source", "target"]])
+        paper_ok = pd.Series(paper["correctly_predicted"].values, index=paper_key)
+        paper_raw = pd.Series(paper["raw_predictions"].values, index=paper_key)
+        keep = ~paper_ok.index.duplicated(keep="first")
+        paper_ok, paper_raw = paper_ok[keep], paper_raw[keep]
+
+        key = pd.MultiIndex.from_frame(pred[["source", "target"]])
+        ok_aligned = paper_ok.reindex(key)
+        raw_aligned = paper_raw.reindex(key)
+        missing = int(ok_aligned.isna().sum())
+        if missing == 0:
+            agree = float((pred["correctly_predicted"].values ==
+                           ok_aligned.values).mean())
+            raw_agree = float((pred["raw_predictions"].values ==
+                               raw_aligned.values).mean())
+
+    g_ours = pred.groupby("cwe_id")["correctly_predicted"].agg(
+        n="size", hits="sum")
+    g_ours["pp"] = g_ours["hits"] / g_ours["n"]
+    if COMPARE_PAPER:
+        g_paper = paper.groupby("cwe_id")["correctly_predicted"].agg(
+            n_paper="size", hits_paper="sum")
+        g_paper["pp_paper"] = g_paper["hits_paper"] / g_paper["n_paper"]
+        table = g_ours.join(g_paper)
+        table["delta_pp"] = table["pp"] - table["pp_paper"]
+    else:
+        table = g_ours
+    top = table.sort_values("n", ascending=False).head(10)
 
     lines = [
         f"# VulRepair M1 — beam {BEAMS}",
@@ -220,22 +235,35 @@ def merge_and_report(results):
         f"- rows: {len(pred)}",
         f"- overall PP (ours): **{ours:.4f}** "
         f"({int(pred['correctly_predicted'].sum())}/{len(pred)})",
-        f"- overall PP (paper raw preds): **{theirs:.4f}** "
+        f"- overall PP (paper beam 50): **{theirs:.4f}** "
         f"({int(paper['correctly_predicted'].sum())}/{len(paper)})",
-        f"- per-row correctness agreement with paper: **{agree:.4f}**",
-        f"- per-row prediction-string agreement with paper: **{raw_agree:.4f}**",
-        f"- unmatched paper rows: {missing}",
+    ]
+    if COMPARE_PAPER:
+        lines += [
+            f"- per-row correctness agreement with paper: **{agree:.4f}**",
+            f"- per-row prediction-string agreement with paper: **{raw_agree:.4f}**",
+            f"- unmatched paper rows: {missing}",
+        ]
+    else:
+        ref = PAPER_FIG8.get(BEAMS)
+        lines.append(
+            f"- paper Fig. 8 for beam {BEAMS}: "
+            + (f"**{ref:.4f}**" if ref is not None else "n/a"))
+    lines += [
         "- wall times: " + ", ".join(f"{s}-{e}: {t:.0f}s" for
                                       (s, e), (_, t) in zip(SHARDS, results)),
         "",
-        "| CWE | n | hits ours | PP ours | PP paper | delta |",
-        "|---|---|---|---|---|---|",
+        "| CWE | n | hits | PP ours |"
+        + (" PP paper | delta |" if COMPARE_PAPER else ""),
+        "|---|---|---|---|" + ("---|---|" if COMPARE_PAPER else ""),
     ]
     for cwe, row in top.iterrows():
-        lines.append(
-            f"| {cwe} | {int(row['size_ours'])} | {int(row['sum_ours'])} | "
-            f"{row['pp_ours']:.3f} | {row['pp_paper']:.3f} | "
-            f"{row['delta_pp']:+.3f} |")
+        line = (f"| {cwe} | {int(row['n'])} | {int(row['hits'])} | "
+                f"{row['pp']:.3f} |")
+        if COMPARE_PAPER:
+            line += f" {row['pp_paper']:.3f} | {row['delta_pp']:+.3f} |"
+        lines.append(line)
+
     report = f"{WORK}/results_beam{BEAMS}.md"
     with open(report, "w") as fh:
         fh.write("\n".join(lines) + "\n")
@@ -259,6 +287,24 @@ def merge_and_report(results):
     log(f"wrote {out_csv}, {report}, {WORK}/run_meta.json")
 
 
+def run_queue(gpu, indices):
+    """Process this GPU's shards strictly sequentially.
+
+    Launching the next shard while the previous one is still releasing its
+    KV cache caused a CUDA OOM in the first full run, so overlap per GPU is
+    forbidden.
+    """
+    done = []
+    for i in indices:
+        start, end = SHARDS[i]
+        try:
+            done.append((i, run_shard(start, end, gpu)))
+        except subprocess.CalledProcessError:
+            log(f"shard {start}-{end} failed on GPU {gpu}; retrying once")
+            done.append((i, run_shard(start, end, gpu)))
+    return done
+
+
 def main():
     log(f"beams={BEAMS} shards={SHARDS}")
     setup_env()
@@ -273,16 +319,17 @@ def main():
         for i, (start, end) in enumerate(SHARDS):
             results[i] = run_shard(start, end, 0)
     else:
+        queues = {g: list(range(g, len(SHARDS), workers))
+                  for g in range(workers)}
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {
-                pool.submit(run_shard, start, end, i % workers): i
-                for i, (start, end) in enumerate(SHARDS)
-            }
+            futures = [pool.submit(run_queue, g, queues[g])
+                       for g in range(workers)]
             for fut in as_completed(futures):
-                i = futures[fut]
-                results[i] = fut.result()
+                for i, res in fut.result():
+                    results[i] = res
 
-    merge_and_report(results)
+    if MERGE_RESULTS:
+        merge_and_report(results)
 
 
 if __name__ == "__main__":
