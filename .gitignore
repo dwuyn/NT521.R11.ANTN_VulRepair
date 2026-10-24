@@ -17,6 +17,9 @@ data/
 *.pth
 *.log
 
+# Kaggle CLI output
+kaggle-output/
+
 # OS / editor
 .DS_Store
 .idea/
