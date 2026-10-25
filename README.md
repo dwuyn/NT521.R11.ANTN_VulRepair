@@ -15,6 +15,7 @@ Tái hiện thực nghiệm paper:
 | [`docs/NT521-RESEARCH.md`](docs/NT521-RESEARCH.md) | Research đầy đủ: pipeline, dataset, RQ1–RQ4, repro, ưu/nhược, Q&A |
 | [`docs/NT521-PLAN.md`](docs/NT521-PLAN.md) | Plan thực thi: rubric, phân vai, timeline W1–W6, reproduction matrix |
 | [`docs/3540250.3549098.pdf`](docs/3540250.3549098.pdf) | Paper gốc (author copy) |
+| [`docs/RESULTS.md`](docs/RESULTS.md) | Kết quả tái hiện thực nghiệm (Beam 50, Beam Sweep 1/5/10/50, Top-10/Top-15 CWE, phân tích độ lệch) |
 
 ## Phạm vi
 
@@ -27,8 +28,8 @@ Tái hiện thực nghiệm paper:
 | Deliverable | Trạng thái |
 |---|---|
 | Research + plan | ✅ |
-| `eval/run_eval.sh` (1-click inference + eval) | ⏳ W1–W2 |
-| `eval/results.md` (nhóm vs paper, lệch số + nguyên nhân) | ⏳ W2–W3 |
+| [`kaggle/vulrepair_eval.py`](kaggle/vulrepair_eval.py) + [`eval/merge_results.py`](eval/merge_results.py) | ✅ Đã chạy trên Kaggle T4 ×2 |
+| [`docs/RESULTS.md`](docs/RESULTS.md) (nhóm vs paper, lệch số + nguyên nhân) | ✅ Beam 50: **43,73%** (746/1.706) vs 43,67% paper; Beam 1/5/10/50: **30% / 41% / 42% / 44%** |
 | Case study + video demo | ⏳ W5 |
 
 ## Chạy eval trên Kaggle (GPU T4)
